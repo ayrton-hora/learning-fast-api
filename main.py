@@ -1,4 +1,3 @@
-from os import stat
 from typing import Optional
 from fastapi import Body, FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, validator
@@ -88,3 +87,8 @@ def delete_post(id: int | None = None):
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, 
                 detail=f"Post with id: '{id}' does not exist.")
+    
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail=f"The 'id' field is required.")
