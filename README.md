@@ -21,7 +21,7 @@ Learning to build a full-fledged API in Python using FastAPI
     $ pip freeze
 
 ## Starting API
-    $ unicorn FILENAME:INSTANCE_NAME --reload
+    $ unicorn PACKAGE.FILENAME:INSTANCE_NAME --reload
 
     Example:
     $ unicorn main:app --reload
