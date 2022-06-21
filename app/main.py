@@ -1,57 +1,46 @@
-import os, time
+import os
+import time
 import psycopg2
-
-from typing import Optional
+from typing import List
+from sqlalchemy.orm import Session
 from psycopg2.extras import RealDictCursor
-from pydantic import BaseModel, validator
-from fastapi import Body, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 
-class PostDTO(BaseModel):
-    title: str
-    content: str
-    published: bool = True
+from . import models, schemas
+from .database import db, engine
 
-    @validator("title", "content")
-    def check_strings(cls, v):
-        assert len(v) > 0, "Empty strings are not allowed!"
-        return v
-
-class UpdatePostDTO(BaseModel):
-    title = ""
-    content = ""
-    published: bool = True
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
 while True:
     try:
-        conn = psycopg2.connect(
-            host=os.environ["POSTGRES_HOST"], 
+        conn = psycopg2.connect(host=os.environ["POSTGRES_HOST"], 
             database=os.environ["POSTGRES_DATABASE"], 
             user=os.environ["POSTGRES_USER"], 
             password=os.environ["POSTGRES_PASSWORD"],
             cursor_factory=RealDictCursor)
         cursor = conn.cursor()
-        print(">>> Connection established with database.")
+        print("\n>>> Status:\nConnection established with database.\n")
         break
 
     except Exception as err:
-        print(">>> Failed to connect to database.")
+        print("\n>>> Status:\nFailed to connect to database.\n")
         print(f"--> Error: {err}")
         time.sleep(2)
 
 @app.get("/health")
-def root():
-    return { "message": "Welcome to my API, I'm alive!" }
+def health_check():
+    return "Welcome to my API, I'm alive!"
 
-@app.get("/posts")
-def get_posts(id: int | None = None):
+@app.get("/posts", response_model=List[schemas.PostResponse])
+def get_posts(id: int | None = None, database: Session = Depends(db)):
     if id is not None:
         try:
-            cursor.execute("SELECT * FROM posts WHERE id = %s", (str(id)))
-            records = cursor.fetchone()
-            if records != None:
-                return { "data": records }
+            data = database.query(models.Post).filter(models.Post.id == id).first()
+
+            if data != None:
+                return data
 
             else:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, 
@@ -62,56 +51,56 @@ def get_posts(id: int | None = None):
                 detail=f"Post with id: '{id}' was not found.")
 
     else:
-        cursor.execute("SELECT * FROM posts")
-        records = cursor.fetchall()
-        return { "data": records }
+        data = database.query(models.Post).all()
+        return data
 
-@app.post("/posts", status_code=status.HTTP_201_CREATED)
-def create_posts(post_dto: PostDTO):
-    cursor.execute("INSERT INTO posts (title, content, published) VALUES (%s, %s, %s) RETURNING *", (post_dto.title, post_dto.content, post_dto.published))
-    new_post = cursor.fetchone()
-    conn.commit()
-    return { "data": new_post }
+@app.post("/posts", status_code=status.HTTP_201_CREATED, response_model=schemas.PostResponse)
+def create_posts(post_dto: schemas.CreatePostDTO, database: Session = Depends(db)):
+    new_post = models.Post(**post_dto.dict())
+    database.add(new_post)
+    database.commit()
+    database.refresh(new_post)
+    return new_post
 
-@app.patch("/posts")
-def update_post(post_dto: UpdatePostDTO, id: int | None = None):
+@app.patch("/posts", response_model=schemas.PostResponse)
+def update_post(post_dto: schemas.UpdatePostDTO, id: int | None = None, database: Session = Depends(db)):
     if id is not None:
-        try:
+        data = database.query(models.Post).filter(models.Post.id == id)
+
+        if data.first() != None:
             if post_dto.title != "":
-                cursor.execute("UPDATE posts SET title = %s WHERE id = %s RETURNING *", (post_dto.title, str(id)))
-            
+                data.update({ "title": post_dto.title }, synchronize_session=False)
+
             if post_dto.content != "":
-                cursor.execute("UPDATE posts SET content = %s WHERE id = %s RETURNING *", (post_dto.content, str(id)))
-            
-            cursor.execute("UPDATE posts SET published = %s WHERE id = %s RETURNING *", (post_dto.published, str(id)))
+               data.update({ "content": post_dto.content }, synchronize_session=False)
 
-            records = cursor.fetchmany()
+            data.update({ "published": post_dto.published }, synchronize_session=False)
 
-            conn.commit()
+            database.commit()
+            return data.first()
 
-            return { "data": records}
-
-        except:
+        else:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Post with id: '{id}' does not exist")
+
     else:
         raise HTTPException(status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail=f"The 'id' field is required.")
 
 @app.delete("/posts")
-def delete_post(id: int | None = None):
+def delete_post(id: int | None = None, database: Session = Depends(db)):
     if id is not None:
-        try:
-            cursor.execute("DELETE FROM posts WHERE id = %s RETURNING *", (str(id)))
-            cursor.fetchone()
-            conn.commit()
+        data = database.query(models.Post).filter(models.Post.id == id).first()
+
+        if data != None:
+            database.delete(data)
+            database.commit()
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-        except:
+        else:
             raise HTTPException(status.HTTP_404_NOT_FOUND, 
                 detail=f"Post with id: '{id}' does not exist.")
     
     else:
         raise HTTPException(status_code=status.HTTP_412_PRECONDITION_FAILED,
             detail=f"The 'id' field is required.")
-
